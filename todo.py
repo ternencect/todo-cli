@@ -314,8 +314,38 @@ def cmd_select(args):
             print(f"  完成时间:    {task.completed_at}")
 
 
+# 命令别名映射表
+COMMAND_ALIASES = {
+    "-a": "add",
+    "-l": "list",
+    "-s": "show",
+    "-e": "edit",
+    "-d": "delete",
+    "/": "search",
+    "-S": "search",
+    "-m": "summary",
+    "-": "select",
+}
+
+
+def preprocess_args():
+    """预处理命令行参数，将命令别名转换为完整命令"""
+    if len(sys.argv) < 2:
+        return
+
+    # 获取第一个非选项参数作为命令
+    cmd = sys.argv[1]
+
+    # 如果是别名，转换为完整命令
+    if cmd in COMMAND_ALIASES:
+        sys.argv[1] = COMMAND_ALIASES[cmd]
+
+
 def main():
     """主入口"""
+    # 预处理命令别名
+    preprocess_args()
+
     parser = argparse.ArgumentParser(
         description="todo-cli - 命令行待办事项管理工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -324,7 +354,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # add 命令
-    add_parser = subparsers.add_parser("add", help="添加新任务")
+    add_parser = subparsers.add_parser("add", help="添加新任务 (简写: -a)", aliases=["-a"])
     add_parser.add_argument("title", help="任务标题")
     add_parser.add_argument("-d", "--description", help="任务描述")
     add_parser.add_argument("-p", "--priority", choices=["high", "medium", "low"],
@@ -333,7 +363,7 @@ def main():
     add_parser.add_argument("--due", help="截止日期 (YYYY-MM-DD)")
 
     # list 命令
-    list_parser = subparsers.add_parser("list", help="列出任务")
+    list_parser = subparsers.add_parser("list", help="列出任务 (简写: -l)")
     list_parser.add_argument("--status", choices=["todo", "in_progress", "done"],
                            help="按状态过滤")
     list_parser.add_argument("--priority", choices=["high", "medium", "low"],
@@ -343,11 +373,11 @@ def main():
                            help="排序方式")
 
     # show 命令
-    show_parser = subparsers.add_parser("show", help="显示任务详情")
+    show_parser = subparsers.add_parser("show", help="显示任务详情 (简写: -s)")
     show_parser.add_argument("id", help="任务 ID")
 
     # edit 命令
-    edit_parser = subparsers.add_parser("edit", help="编辑任务")
+    edit_parser = subparsers.add_parser("edit", help="编辑任务 (简写: -e)")
     edit_parser.add_argument("id", help="任务 ID")
     edit_parser.add_argument("--title", help="新标题")
     edit_parser.add_argument("--description", help="新描述")
@@ -359,21 +389,21 @@ def main():
     edit_parser.add_argument("--due", help="新截止日期")
 
     # delete 命令
-    delete_parser = subparsers.add_parser("delete", help="删除任务")
+    delete_parser = subparsers.add_parser("delete", help="删除任务 (简写: -d)")
     delete_parser.add_argument("id", help="任务 ID")
 
     # search 命令
-    search_parser = subparsers.add_parser("search", help="搜索任务")
+    search_parser = subparsers.add_parser("search", help="搜索任务 (简写: / 或 -S)")
     search_parser.add_argument("keyword", help="搜索关键词")
 
     # summary 命令
-    summary_parser = subparsers.add_parser("summary", help="每日总结")
+    summary_parser = subparsers.add_parser("summary", help="每日总结 (简写: -m)")
     summary_parser.add_argument("--date", help="指定日期 (YYYY-MM-DD)")
     summary_parser.add_argument("--continue", action="store_true", dest="continue_task",
                               help="将未完成任务延续到今天")
 
     # select 命令
-    select_parser = subparsers.add_parser("select", help="交互式选择任务")
+    select_parser = subparsers.add_parser("select", help="交互式选择任务 (简写: -)")
     select_parser.add_argument("--status", choices=["todo", "in_progress", "done"],
                               help="按状态过滤")
 
