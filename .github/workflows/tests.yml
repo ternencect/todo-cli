@@ -6,8 +6,10 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Python 3.9 has no setup-python build for Ubuntu 26.04 (ubuntu-latest).
+        os: [ubuntu-24.04, macos-latest, windows-latest]
         python: ['3.9', '3.12']
     runs-on: ${{ matrix.os }}
     steps:
