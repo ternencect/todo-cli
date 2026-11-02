@@ -1,125 +1,160 @@
-"""
-任务数据模型定义
-"""
-from dataclasses import dataclass, field
-from datetime import datetime
+"""Versioned, backwards-compatible task records and date handling."""
+from dataclasses import dataclass, field, fields, asdict
+from datetime import datetime, date, timedelta
 from enum import Enum
 from typing import Optional, List
+import re
 import uuid
 
 
+def now():
+    return datetime.now().astimezone().isoformat()
+
+
+def normalize_due(value):
+    if value is None or value == '':
+        return None
+    if not isinstance(value, str):
+        raise ValueError('截止日期必须是字符串')
+    value = value.strip()
+    if value in ('today', 'tomorrow'):
+        return (date.today() + timedelta(days=value == 'tomorrow')).isoformat()
+    if re.fullmatch(r'\+\d+d', value):
+        return (date.today() + timedelta(days=int(value[1:-1]))).isoformat()
+    try:
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            return date.fromisoformat(value).isoformat()
+        return datetime.fromisoformat(value).isoformat()
+    except ValueError:
+        raise ValueError('日期格式应为 YYYY-MM-DD、ISO 时间、today、tomorrow 或 +3d')
+
+
 class TaskStatus(str, Enum):
-    """任务状态枚举"""
-    TODO = "todo"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
+    TODO = 'todo'
+    IN_PROGRESS = 'in_progress'
+    BLOCKED = 'blocked'
+    REVIEW = 'review'
+    DONE = 'done'
 
     @classmethod
-    def from_string(cls, value: str) -> 'TaskStatus':
-        """从字符串创建状态枚举"""
-        value_map = {
-            "todo": cls.TODO,
-            "doing": cls.IN_PROGRESS,
-            "in_progress": cls.IN_PROGRESS,
-            "done": cls.DONE,
-            "completed": cls.DONE,
-            "finished": cls.DONE,
-        }
-        return value_map.get(value.lower(), cls.TODO)
+    def from_string(cls, value):
+        aliases = {'doing': 'in_progress', 'completed': 'done', 'finished': 'done'}
+        return cls(aliases.get(value.lower(), value.lower()))
 
 
 class TaskPriority(str, Enum):
-    """任务优先级枚举"""
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
+    HIGH = 'high'
+    MEDIUM = 'medium'
+    LOW = 'low'
 
     @classmethod
-    def from_string(cls, value: str) -> 'TaskPriority':
-        """从字符串创建优先级枚举"""
-        value_map = {
-            "high": cls.HIGH,
-            "h": cls.HIGH,
-            "medium": cls.MEDIUM,
-            "med": cls.MEDIUM,
-            "m": cls.MEDIUM,
-            "low": cls.LOW,
-            "l": cls.LOW,
-        }
-        return value_map.get(value.lower(), cls.MEDIUM)
+    def from_string(cls, value):
+        aliases = {'h': 'high', 'm': 'medium', 'med': 'medium', 'l': 'low'}
+        return cls(aliases.get(value.lower(), value.lower()))
 
-    def rank(self) -> int:
-        """返回优先级排序值（值越大优先级越高）"""
-        return {self.HIGH: 3, self.MEDIUM: 2, self.LOW: 1}[self]
+    def rank(self):
+        return {'high': 3, 'medium': 2, 'low': 1}[self.value]
 
 
 @dataclass
 class Task:
-    """任务数据模型"""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    title: str = ""
+    title: str = ''
     description: Optional[str] = None
     status: TaskStatus = TaskStatus.TODO
     priority: TaskPriority = TaskPriority.MEDIUM
     tags: List[str] = field(default_factory=list)
     due_date: Optional[str] = None
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(default_factory=now)
     completed_at: Optional[str] = None
     is_continued: bool = False
+    updated_at: str = field(default_factory=now)
+    branches: List[str] = field(default_factory=list)
+    acceptance: List[str] = field(default_factory=list)
+    dependencies: List[str] = field(default_factory=list)
+    parent_id: Optional[str] = None
+    owner: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    result: Optional[str] = None
+    next_step: Optional[str] = None
+    links: List[str] = field(default_factory=list)
+    notes: List[dict] = field(default_factory=list)
+    history: List[dict] = field(default_factory=list)
+    request_id: Optional[str] = None
+    schema_version: int = 2
 
-    def to_dict(self) -> dict:
-        """转换为字典"""
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "status": self.status.value,
-            "priority": self.priority.value,
-            "tags": self.tags,
-            "due_date": self.due_date,
-            "created_at": self.created_at,
-            "completed_at": self.completed_at,
-            "is_continued": self.is_continued,
-        }
+    def to_dict(self):
+        data = asdict(self)
+        data['status'] = self.status.value
+        data['priority'] = self.priority.value
+        return data
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'Task':
-        """从字典创建任务"""
-        return cls(
-            id=data.get("id", str(uuid.uuid4())),
-            title=data.get("title", ""),
-            description=data.get("description"),
-            status=TaskStatus(data.get("status", TaskStatus.TODO.value)),
-            priority=TaskPriority(data.get("priority", TaskPriority.MEDIUM.value)),
-            tags=data.get("tags", []),
-            due_date=data.get("due_date"),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            completed_at=data.get("completed_at"),
-            is_continued=data.get("is_continued", False),
-        )
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError('任务记录必须是对象')
+        known = {f.name for f in fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError('不支持的任务字段: ' + ', '.join(sorted(unknown)))
+        if data.get('schema_version', 1) not in (1, 2):
+            raise ValueError('不支持的任务版本')
+        values = dict(data)
+        values['status'] = TaskStatus(data.get('status', 'todo'))
+        values['priority'] = TaskPriority(data.get('priority', 'medium'))
+        task = cls(**values)
+        task.validate()
+        return task
+
+    def validate(self):
+        if not isinstance(self.id, str) or not self.id or not isinstance(self.title, str) or not self.title.strip():
+            raise ValueError('任务 ID 和标题不能为空')
+        for name in ('tags', 'branches', 'acceptance', 'dependencies', 'links'):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(x, str) or not x.strip() for x in value):
+                raise ValueError(name + ' 必须是非空字符串列表')
+        for name in ('description', 'parent_id', 'owner', 'blocked_reason', 'result', 'next_step', 'request_id', 'completed_at'):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(name + ' 必须是字符串或 null')
+        for name in ('notes', 'history'):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
+                raise ValueError(name + ' 必须是对象列表')
+            required = ('at', 'actor', 'text') if name == 'notes' else ('at', 'actor', 'action')
+            if any(any(not isinstance(item.get(key), str) for key in required) for item in value):
+                raise ValueError(name + ' 缺少必要的时间、操作者或内容字段')
+        for name in ('created_at', 'updated_at', 'completed_at'):
+            value = getattr(self, name)
+            if name == 'completed_at' and value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(name + ' 必须是 ISO 时间字符串')
+            datetime.fromisoformat(value)
+        if self.due_date is not None:
+            if not isinstance(self.due_date, str) or normalize_due(self.due_date) != self.due_date:
+                raise ValueError('存储的截止日期必须是规范的 ISO 日期或时间')
 
     def mark_done(self):
-        """标记任务为完成"""
         self.status = TaskStatus.DONE
-        self.completed_at = datetime.now().isoformat()
+        self.completed_at = now()
 
-    def is_overdue(self) -> bool:
-        """检查任务是否已过期"""
+    def due_day(self):
+        if not self.due_date:
+            return None
+        due = datetime.fromisoformat(self.due_date)
+        if due.tzinfo:
+            due = due.astimezone()
+        return due.date()
+
+    def is_overdue(self):
         if not self.due_date or self.status == TaskStatus.DONE:
             return False
-        try:
-            due = datetime.fromisoformat(self.due_date)
-            return datetime.now() > due
-        except (ValueError, TypeError):
-            return False
+        if len(self.due_date) == 10:
+            return self.due_day() < date.today()
+        due = datetime.fromisoformat(self.due_date)
+        return datetime.now(due.tzinfo) > due
 
-    def is_due_soon(self, days: int = 1) -> bool:
-        """检查任务是否即将到期（指定天数内）"""
-        if not self.due_date or self.status == TaskStatus.DONE:
-            return False
-        try:
-            due = datetime.fromisoformat(self.due_date)
-            delta = (due - datetime.now()).days
-            return 0 <= delta <= days
-        except (ValueError, TypeError):
-            return False
+    def is_due_soon(self, days=1):
+        return bool(self.due_date and self.status != TaskStatus.DONE and not self.is_overdue()
+                    and 0 <= (self.due_day() - date.today()).days <= days)

@@ -1,69 +1,36 @@
-# todo-cli 安装指南
+# 安装与升级
 
-## 方式 1: 从分发包安装（推荐）
+需要 Python 3.7+。核心 CLI 使用标准库；安装打包由 setuptools 提供。
 
-下载 `dist/` 目录中的文件，然后：
-
-**使用 wheel 文件（推荐）**：
 ```bash
-pip install todo_cli-1.0.0-py3-none-any.whl
-```
-
-**或使用源码压缩包**：
-```bash
-pip install todo_cli-1.0.0.tar.gz
-```
-
-## 方式 2: 从 GitHub 仓库安装
-
-**从 GitHub 克隆并安装**：
-```bash
-git clone https://github.com/your-username/todo-cli.git
+git clone https://github.com/ternencect/todo-cli.git
 cd todo-cli
-pip install -e .
-```
-
-**或直接从 GitHub 安装**：
-```bash
-pip install git+https://github.com/your-username/todo-cli.git
-```
-
-## 方式 3: 开发模式安装
-
-如果你想要修改代码：
-
-```bash
-git clone https://github.com/your-username/todo-cli.git
-cd todo-cli
-pip install -e .
-```
-
-使用 `-e` 参数安装后，对代码的修改会立即生效，无需重新安装。
-
-## 系统要求
-
-- Python 3.7 或更高版本
-- pip 包管理器
-
-## 验证安装
-
-安装完成后，运行以下命令验证：
-
-```bash
+python3 -m pip install -e .
 todo-cli --help
-todo-cli list
 ```
 
-## Windows 用户注意事项
-
-如果需要使用交互式选择功能（`todo-cli select`），请额外安装：
+也可不安装直接运行：
 
 ```bash
-pip install windows-curses
+python3 /absolute/path/to/todo-cli/todo.py --help
 ```
 
-## 卸载
+在需要管理的项目目录执行 `todo-cli init`。Git 项目中的分支和 linked worktree 共享任务数据；非 Git 项目通过 `.todo-project` 标记定位。
+
+Windows 的交互选择器可选安装 `python -m pip install windows-curses`；未安装时使用数字菜单。Agent 使用 JSON 命令，无需 curses。
+
+## 升级旧任务
+
+新版默认数据位于用户数据目录。旧版当前目录中的 `tasks.json` 不会被自动迁移或删除：
 
 ```bash
-pip uninstall todo-cli
+todo-cli --file ./tasks.json list --all
+todo-cli init
+todo-cli import ./tasks.json
 ```
+
+先确认项目正确，再导入。重复 ID 会拒绝整次导入。默认列表隐藏已完成任务，使用 `--all` 查看。
+
+可通过 `TODO_CLI_HOME` 自定义数据目录。完整工作流、存储语义和机器接口见 [README](README.md)。
+
+卸载程序：`python3 -m pip uninstall todo-cli`。卸载不会主动删除任务数据。

@@ -1,81 +1,114 @@
-"""
-JSON 文件存储层
-"""
+"""Atomic JSON storage with a previous-good backup and optimistic concurrency."""
+import hashlib
 import json
 import os
-from typing import List, Optional
 from pathlib import Path
+import tempfile
+from contextlib import contextmanager
 from .model import Task
 
 
+class ConflictError(RuntimeError):
+    pass
+
+
+class StorageError(RuntimeError):
+    pass
+
+
+@contextmanager
+def file_lock(path):
+    """Serialize cooperating writers; OS releases locks if a process exits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as handle:
+        if os.name == 'nt':
+            import msvcrt
+            handle.seek(0, 2)
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def atomic_write(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '.', dir=str(path.parent))
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class TaskStorage:
-    """任务存储管理器"""
-
-    def __init__(self, filepath: str = "tasks.json"):
-        """
-        初始化存储管理器
-
-        Args:
-            filepath: JSON 文件路径，默认为当前目录的 tasks.json
-        """
+    def __init__(self, filepath='tasks.json'):
         self.filepath = Path(filepath)
-        self._ensure_file_exists()
+        self._revision = None
+        self._loaded = False
 
-    def _ensure_file_exists(self):
-        """确保存储文件存在"""
-        if not self.filepath.exists():
-            self._save_tasks([])
-
-    def _save_tasks(self, tasks: List[dict]):
-        """保存任务列表到文件"""
-        with open(self.filepath, 'w', encoding='utf-8') as f:
-            json.dump(tasks, f, ensure_ascii=False, indent=2)
-
-    def _load_tasks(self) -> List[dict]:
-        """从文件加载任务列表"""
-        with open(self.filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
-
-    def load(self) -> List[Task]:
-        """加载所有任务"""
+    def _read(self):
         try:
-            tasks_data = self._load_tasks()
-            return [Task.from_dict(data) for data in tasks_data]
-        except (json.JSONDecodeError, FileNotFoundError):
-            return []
-
-    def save(self, tasks: List[Task]):
-        """保存所有任务"""
-        tasks_data = [task.to_dict() for task in tasks]
-        self._save_tasks(tasks_data)
-
-    def backup(self) -> Optional[str]:
-        """
-        创建备份文件
-
-        Returns:
-            备份文件路径，失败返回 None
-        """
-        if not self.filepath.exists():
+            return self.filepath.read_bytes()
+        except FileNotFoundError:
             return None
 
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.filepath.with_suffix(f".{timestamp}.bak")
+    @staticmethod
+    def _digest(raw):
+        return hashlib.sha256(raw).hexdigest() if raw is not None else None
 
+    def load(self):
+        raw = self._read()
         try:
-            import shutil
-            shutil.copy2(self.filepath, backup_path)
-            return str(backup_path)
-        except Exception:
-            return None
+            data = json.loads(raw) if raw is not None else []
+            if not isinstance(data, list):
+                raise ValueError('顶层必须是任务数组')
+            tasks = [Task.from_dict(item) for item in data]
+            if len({task.id for task in tasks}) != len(tasks):
+                raise ValueError('存在重复任务 ID')
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise StorageError('无法读取 {}: {}；原文件未修改，请检查或从 .bak 恢复'.format(self.filepath, exc)) from exc
+        self._revision = self._digest(raw)
+        self._loaded = True
+        return tasks
 
-    def get_backup_files(self) -> List[str]:
-        """获取所有备份文件"""
-        pattern = f"{self.filepath.stem}.*.bak"
-        backups = sorted(
-            self.filepath.parent.glob(f"{self.filepath.stem}.*.bak"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
-        return [str(b) for b in backups]
+    def save(self, tasks):
+        for task in tasks:
+            task.validate()
+        payload = (json.dumps([t.to_dict() for t in tasks], ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        with file_lock(self.filepath.with_name(self.filepath.name + '.lock')):
+            current = self._read()
+            if not self._loaded or self._digest(current) != self._revision:
+                raise ConflictError('任务已被其他进程修改，请重新读取后重试')
+            if current is not None:
+                atomic_write(self.filepath.with_name(self.filepath.name + '.bak'), current)
+            atomic_write(self.filepath, payload)
+            self._revision = self._digest(payload)
+
+    def backup(self):
+        with file_lock(self.filepath.with_name(self.filepath.name + '.lock')):
+            raw = self._read()
+            if raw is None:
+                return None
+            path = self.filepath.with_name(self.filepath.name + '.bak')
+            atomic_write(path, raw)
+            return str(path)
+
+    def get_backup_files(self):
+        return [str(p) for p in sorted(self.filepath.parent.glob(self.filepath.name + '*.bak'))]

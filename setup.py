@@ -12,8 +12,8 @@ def read_file(filename):
 
 setup(
     name='todo-cli',
-    version='1.0.0',
-    description='一个功能完整的命令行待办事项管理工具',
+    version='2.0.0',
+    description='面向开发者与 AI Coding Agent 的本地项目任务和交接工具',
     long_description=read_file('README.md'),
     long_description_content_type='text/markdown',
     author='ternencect',
